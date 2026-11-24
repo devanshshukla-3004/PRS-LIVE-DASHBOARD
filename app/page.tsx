@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, BatteryCharging, Clock3, Gauge, MapPin, Radio, ShieldCheck, Thermometer, Wifi, WifiOff, Zap } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
@@ -29,6 +29,23 @@ type LiveSnapshot = {
   error?: string;
 };
 
+
+type IncidentSnapshot = {
+  id: string; deviceId: string; type: "VIBRATION_EVENT";
+  status: "ACTIVE" | "RESOLVED" | "INTERRUPTED";
+  startedAt: string; endedAt: string | null; durationSeconds: number | null;
+  startLocation: { latitude: number; longitude: number; satellites: number } | null;
+  endLocation: { latitude: number; longitude: number; satellites: number } | null;
+  startVibration: { score: number; ax: number; ay: number; az: number };
+  endVibration: { score: number; ax: number; ay: number; az: number } | null;
+};
+type NearbyPlace = {
+  id: string; name: string; category: string; distanceKm: number;
+  latitude: number; longitude: number; address: string; phone: string | null;
+  mapsUrl: string; sourceUrl: string;
+};
+type NearbyResponse = { available: boolean; reason?: string; error?: string; source?: string; radiusKm?: number; places: NearbyPlace[] };
+
 function Metric({ label, value, unit, icon: Icon, foot, alert = false }: {
   label: string; value: string; unit?: string; icon: typeof Activity; foot: string; alert?: boolean;
 }) {
@@ -54,6 +71,13 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [range, setRange] = useState<"1m" | "5m" | "15m">("5m");
+  const [incidents, setIncidents] = useState<IncidentSnapshot[]>([]);
+  const [incidentCounts, setIncidentCounts] = useState({ total: 0, active: 0, resolved: 0, interrupted: 0 });
+  const [incidentError, setIncidentError] = useState("");
+  const [eventNotice, setEventNotice] = useState("");
+  const lastEventState = useRef<boolean | null>(null);
+  const [nearby, setNearby] = useState<NearbyResponse | null>(null);
+  const [nearbyLoading, setNearbyLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -75,6 +99,39 @@ export default function Home() {
     const timer = window.setInterval(poll, 3000);
     return () => { active = false; window.clearInterval(timer); };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    const pollIncidents = async () => {
+      try {
+        const response = await fetch("/api/incidents", { cache: "no-store" });
+        const data = await response.json();
+        if (active && response.ok) {
+          setIncidents(Array.isArray(data.incidents) ? data.incidents : []);
+          setIncidentCounts(data.counts ?? { total: 0, active: 0, resolved: 0, interrupted: 0 });
+          setIncidentError(data.error ?? "");
+        } else if (active) setIncidentError(data.error ?? "Incident history unavailable");
+      } catch {
+        if (active) setIncidentError("Could not load incident history.");
+      }
+    };
+    pollIncidents();
+    const timer = window.setInterval(pollIncidents, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+
+  const loadNearby = async () => {
+    setNearbyLoading(true);
+    try {
+      const response = await fetch("/api/nearby", { cache: "no-store" });
+      const data = await response.json() as NearbyResponse;
+      setNearby(data);
+    } catch {
+      setNearby({ available: false, error: "Nearby services could not be loaded. Please retry.", places: [] });
+    } finally {
+      setNearbyLoading(false);
+    }
+  };
 
   const telemetry = snapshot?.telemetry ?? null;
   const fresh = Boolean(snapshot?.connected && telemetry &&
@@ -102,6 +159,15 @@ export default function Home() {
   const avgScore = chartData.length
     ? Math.round(chartData.reduce((sum, point) => sum + point.vibrationScore, 0) / chartData.length)
     : null;
+
+  useEffect(() => {
+    if (!fresh || !telemetry) return;
+    const current = telemetry.mpu.eventActive;
+    if (lastEventState.current === false && current) setEventNotice("High vibration event started. Incident logging is active.");
+    if (lastEventState.current === true && !current) setEventNotice("Vibration event ended. End location and readings have been saved.");
+    if (lastEventState.current === null && current) setEventNotice("A vibration event is currently active.");
+    lastEventState.current = current;
+  }, [fresh, telemetry?.mpu.eventActive]);
 
   return <main className="min-h-screen">
     <header className="border-b border-white/10 bg-[#090e15]/90 backdrop-blur-xl">
@@ -210,6 +276,63 @@ export default function Home() {
           </div>
         </div>
         <p className="mt-3 text-[10px] muted">Location is sensitive. Exact coordinates are now visible on this dashboard; share the dashboard link carefully.</p>
+      </section>
+
+
+      <section className="panel mt-5 p-5 sm:p-6" id="incident-center">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><p className="text-[11px] tracking-[.18em] muted">PERSISTENT EVENT RECORDS</p><h2 className="mt-1 text-lg font-semibold">Incident Center</h2><p className="mt-1 text-xs muted">Start/end records are created from the firmware event flag. Locations are snapshots from the event packets.</p></div>
+          <span className="rounded-full bg-cyan-300/10 px-3 py-1.5 text-[10px] font-semibold text-cyan-100">LIVE INCIDENT LOG</span>
+        </div>
+        {eventNotice && <div className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3"><div className="flex gap-2 text-sm text-amber-100"><AlertTriangle size={17} className="mt-0.5 shrink-0"/>{eventNotice}</div><button onClick={() => setEventNotice("")} className="text-xs text-amber-100/70 hover:text-white">Dismiss</button></div>}
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            ["Total", incidentCounts.total], ["Active", incidentCounts.active],
+            ["Resolved", incidentCounts.resolved], ["Interrupted", incidentCounts.interrupted],
+          ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-white/8 bg-black/20 p-3"><p className="text-[10px] uppercase tracking-wider muted">{String(label)}</p><p className="mt-1 text-xl font-semibold tabular-nums">{value}</p></div>)}
+        </div>
+        {incidentError && <p className="mt-3 text-xs text-amber-200">{incidentError}</p>}
+        <div className="mt-4 space-y-3">
+          {incidents.length ? incidents.map((incident) => <article key={incident.id} className="rounded-xl border border-white/10 bg-black/20 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div><p className="text-sm font-semibold">{incident.id}</p><p className="mt-1 text-xs muted">{incident.deviceId} · {new Date(incident.startedAt).toLocaleString()}</p></div>
+              <span className={"rounded-full px-3 py-1 text-[10px] font-semibold " + (incident.status === "ACTIVE" ? "bg-amber-300/10 text-amber-100" : incident.status === "INTERRUPTED" ? "bg-red-300/10 text-red-100" : "bg-emerald-300/10 text-emerald-100")}>{incident.status}</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div><p className="text-[10px] muted">Start score</p><p className="mt-1 text-sm font-semibold">{Math.round(incident.startVibration.score)}</p></div>
+              <div><p className="text-[10px] muted">End score</p><p className="mt-1 text-sm font-semibold">{incident.endVibration ? Math.round(incident.endVibration.score) : "—"}</p></div>
+              <div><p className="text-[10px] muted">Duration</p><p className="mt-1 text-sm font-semibold">{incident.durationSeconds !== null ? incident.durationSeconds + " sec" : incident.status === "ACTIVE" ? "In progress" : "Unknown"}</p></div>
+              <div><p className="text-[10px] muted">GPS snapshot</p><p className="mt-1 text-sm font-semibold">{incident.startLocation ? "Available" : "Unavailable"}</p></div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-3 text-xs">
+              {incident.startLocation && <a className="text-cyan-200 underline underline-offset-4" href={"https://www.google.com/maps?q=" + incident.startLocation.latitude + "," + incident.startLocation.longitude} target="_blank" rel="noreferrer">Open start location ↗</a>}
+              {incident.endLocation && <a className="text-cyan-200 underline underline-offset-4" href={"https://www.google.com/maps?q=" + incident.endLocation.latitude + "," + incident.endLocation.longitude} target="_blank" rel="noreferrer">Open end location ↗</a>}
+              <span className="muted">{incident.endedAt ? "Ended " + new Date(incident.endedAt).toLocaleString() : incident.status === "INTERRUPTED" ? "Telemetry stopped during event" : "Waiting for event end"}</span>
+            </div>
+          </article>) : <div className="rounded-xl border border-dashed border-white/10 p-7 text-center"><Activity size={25} className="mx-auto text-slate-500"/><p className="mt-3 text-sm font-medium">No recorded incidents yet</p><p className="mt-1 text-xs muted">A record will appear when the ESP8266 reports eventActive = true. No sample incidents are inserted.</p></div>}
+        </div>
+      </section>
+
+      <section className="panel mt-5 p-5 sm:p-6" id="roadside-assistance">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><p className="text-[11px] tracking-[.18em] muted">OPENSTREETMAP · LIVE PLACE SEARCH</p><h2 className="mt-1 text-lg font-semibold">Nearby roadside assistance</h2><p className="mt-1 text-xs muted">Find tyre shops, mechanics, hospitals, police, fire services and fuel stations within 15 km of the latest fresh GPS fix.</p></div>
+          <button onClick={loadNearby} disabled={nearbyLoading} className="rounded-lg border border-cyan-200/25 bg-cyan-300/10 px-4 py-2 text-xs font-semibold text-cyan-100 disabled:opacity-50">{nearbyLoading ? "Searching…" : nearby ? "Refresh nearby places" : "Find nearby services"}</button>
+        </div>
+        {nearby?.available && <p className="mt-3 text-xs muted">{nearby.places.length} mapped listings · within {nearby.radiusKm} km · Source: {nearby.source}</p>}
+        {nearby?.reason && <p className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-100">{nearby.reason}</p>}
+        {nearby?.error && <p className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-100">{nearby.error}</p>}
+        {nearby?.available && <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {nearby.places.length ? nearby.places.map((place) => <article key={place.id} className="rounded-xl border border-white/10 bg-black/20 p-4">
+            <div className="flex items-start justify-between gap-3"><div><span className="text-[10px] uppercase tracking-wider text-cyan-200">{place.category}</span><h3 className="mt-1 text-sm font-semibold">{place.name}</h3></div><span className="shrink-0 text-xs font-semibold tabular-nums text-emerald-200">{place.distanceKm.toFixed(1)} km</span></div>
+            <p className="mt-2 text-xs muted">{place.address}</p>
+            <div className="mt-3 flex flex-wrap gap-3 text-xs">
+              <a className="text-cyan-200 underline underline-offset-4" href={place.mapsUrl} target="_blank" rel="noreferrer">Directions ↗</a>
+              {place.phone && <a className="text-cyan-200 underline underline-offset-4" href={"tel:" + place.phone}>Call {place.phone}</a>}
+              <a className="text-slate-400 underline underline-offset-4" href={place.sourceUrl} target="_blank" rel="noreferrer">OSM listing</a>
+            </div>
+          </article>) : <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm muted md:col-span-2">No mapped services were returned in this area. Try again later or search directly in Google Maps.</div>}
+        </div>}
+        <p className="mt-3 text-[10px] muted">Listings depend on OpenStreetMap community data and may be incomplete, outdated, closed or missing phone numbers. Call to verify before travelling.</p>
       </section>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-2">
