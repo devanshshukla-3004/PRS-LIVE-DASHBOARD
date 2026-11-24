@@ -1,49 +1,43 @@
 # PRS Command Center
 
-A prototype dashboard for the Puncture Rescue System (PRS).
+A live-only engineering dashboard for the Puncture Rescue System prototype.
 
-## Current capabilities
+## Live capabilities
 
-- Demo dashboard with clearly labelled sample data.
-- Authenticated ESP8266 telemetry ingestion at `POST /api/telemetry`.
-- Dashboard polls `GET /api/telemetry` every 3 seconds and marks a device stale when no recent packet arrives.
-- Latest telemetry is stored in Upstash Redis with a 120-second expiry.
-- Public dashboard API omits exact GPS coordinates; coordinates are retained server-side only until the Redis record expires.
+- Authenticated ESP8266 telemetry ingestion at \`POST /api/telemetry\`.
+- Dashboard polls \`GET /api/telemetry\` every 3 seconds and marks packets stale after 15 seconds.
+- Actual MPU vibration score and accelerometer axes are stored as a rolling history (up to 180 points, 15-minute TTL).
+- Live chart plots only received ESP8266 packets. It never generates sample/demo values.
+- Exact GPS coordinates remain server-side; the public dashboard receives GPS fix and satellite count only.
+- Pressure values marked simulated are never presented as measured PSI.
+- Temperature and OLED are shown as unavailable until integrated.
 
 ## Hardware truthfulness
 
-- Pressure remains simulated/unavailable until a real tyre pressure sensor is installed.
-- Temperature remains unavailable until a compatible temperature probe is integrated.
+- Pressure remains unavailable until a real tyre pressure sensor is integrated.
+- Temperature remains unavailable until a compatible probe is integrated.
 - Vibration events are experimental alerts, not confirmed punctures.
 - This prototype is not certified for road-safety decisions.
 
 ## Configure live telemetry
 
-1. Create a dedicated Upstash Redis database and copy its REST URL and REST token.
-2. Generate a unique device token locally. On Windows PowerShell:
-   `[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))`
-3. In Vercel → Project → Settings → Environment Variables, add:
-   - `UPSTASH_REDIS_REST_URL`
-   - `UPSTASH_REDIS_REST_TOKEN`
-   - `PRS_DEVICE_TOKEN`
-   Select Production (and Preview if required). Keep all three values secret.
-4. Redeploy after adding the variables.
-5. Put the same `PRS_DEVICE_TOKEN` into the ESP8266 firmware locally. Never commit Wi-Fi credentials or tokens.
-6. Follow [the ESP8266 integration guide](docs/ESP8266-TELEMETRY.md) and adapt the sender template in `examples/esp8266-telemetry-sender.ino` to the actual MPU/GPS variables.
+1. Configure Upstash Redis REST URL and token.
+2. In Vercel environment variables, configure \`UPSTASH_REDIS_REST_URL\`, \`UPSTASH_REDIS_REST_TOKEN\`, and \`PRS_DEVICE_TOKEN\`.
+3. Put the same device token into the ESP8266 firmware locally. Never commit Wi-Fi credentials or tokens.
+4. Keep the ESP8266 online and send authenticated telemetry every 3–5 seconds.
 
 ## API contract
 
-- Device: `POST /api/telemetry`, JSON body, `Authorization: Bearer <PRS_DEVICE_TOKEN>`.
-- Dashboard: `GET /api/telemetry`, public status snapshot without exact GPS coordinates.
-- Send every 3–5 seconds. The server expires the latest record after 120 seconds.
-
-See [docs/ESP8266-TELEMETRY.md](docs/ESP8266-TELEMETRY.md) for the payload schema and security notes.
+- Device: \`POST /api/telemetry\`, JSON body, \`Authorization: Bearer <PRS_DEVICE_TOKEN>\`.
+- Dashboard: \`GET /api/telemetry\`, latest snapshot plus rolling MPU history.
+- Latest snapshot TTL: 120 seconds.
+- History: maximum 180 points, 15-minute TTL.
 
 ## Run locally
 
-```bash
+\`\`\`bash
 npm install
 npm run dev
-``
+\`\`\`
 
 Built with Next.js, TypeScript, Tailwind CSS, Recharts and Upstash Redis REST.
