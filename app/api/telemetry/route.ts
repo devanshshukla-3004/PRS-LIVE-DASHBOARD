@@ -159,7 +159,7 @@ export async function GET() {
         uptimeSeconds: record.uptimeSeconds,
         receivedAt: record.receivedAt,
         mpu: record.mpu,
-        gps: { fix: record.gps.fix, satellites: record.gps.satellites },
+        gps: { fix: record.gps.fix, satellites: record.gps.satellites, latitude: record.gps.fix ? record.gps.latitude : null, longitude: record.gps.fix ? record.gps.longitude : null },
         pressure: record.pressure,
         temperature: record.temperature,
       },
