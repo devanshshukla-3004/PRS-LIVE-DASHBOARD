@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -5,6 +6,7 @@ export const dynamic = "force-dynamic";
 
 const LATEST_KEY = "prs:telemetry:latest";
 const HISTORY_KEY = "prs:telemetry:history";
+const INCIDENT_INDEX = "prs:incidents:index";
 const LATEST_TTL_SECONDS = 120;
 const HISTORY_TTL_SECONDS = 900;
 const MAX_HISTORY = 180;
@@ -16,6 +18,23 @@ type Telemetry = {
   gps: { fix: boolean; satellites: number; latitude: number | null; longitude: number | null };
   pressure: { connected: boolean; psi: number | null; simulated: boolean };
   temperature: { connected: boolean; celsius: number | null };
+};
+
+type Incident = {
+  id: string;
+  deviceId: string;
+  type: "VIBRATION_EVENT";
+  status: "ACTIVE" | "RESOLVED" | "INTERRUPTED";
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  startLocation: { latitude: number; longitude: number; satellites: number } | null;
+  endLocation: { latitude: number; longitude: number; satellites: number } | null;
+  startVibration: { score: number; ax: number; ay: number; az: number };
+  endVibration: { score: number; ax: number; ay: number; az: number } | null;
+  lastTelemetryAt: string;
+  interruptedAt?: string;
+  resumedAt?: string;
 };
 
 function redisConfig() {
@@ -61,6 +80,16 @@ async function redisPipeline(config: { url: string; token: string }, commands: s
   return results;
 }
 
+function locationSnapshot(gps: Telemetry["gps"]) {
+  return gps.fix && gps.latitude !== null && gps.longitude !== null
+    ? { latitude: gps.latitude, longitude: gps.longitude, satellites: gps.satellites }
+    : null;
+}
+
+function vibrationSnapshot(mpu: Telemetry["mpu"]) {
+  return { score: mpu.vibrationScore, ax: mpu.ax, ay: mpu.ay, az: mpu.az };
+}
+
 function validTelemetry(value: unknown): value is Telemetry {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -88,7 +117,7 @@ function validTelemetry(value: unknown): value is Telemetry {
 
 export async function POST(request: NextRequest) {
   const expected = process.env.PRS_DEVICE_TOKEN;
-  const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  const supplied = request.headers.get("authorization")?.replace(/^Bearer\\s+/i, "");
   if (!expected || !supplied || supplied.length !== expected.length ||
       !Buffer.from(supplied).equals(Buffer.from(expected))) {
     return NextResponse.json({ ok: false, error: "Unauthorized device" }, { status: 401 });
@@ -116,13 +145,64 @@ export async function POST(request: NextRequest) {
   };
 
   try {
-    await redisPipeline(config, [
+    const activeKey = "prs:incident:active:" + record.deviceId;
+    const activeId = await redisCommand(config, ["GET", activeKey]) as string | null;
+    const commands: string[][] = [
       ["SET", LATEST_KEY, JSON.stringify(record), "EX", String(LATEST_TTL_SECONDS)],
       ["RPUSH", HISTORY_KEY, JSON.stringify(historyPoint)],
       ["LTRIM", HISTORY_KEY, String(-MAX_HISTORY), "-1"],
       ["EXPIRE", HISTORY_KEY, String(HISTORY_TTL_SECONDS)],
-    ]);
-    return NextResponse.json({ ok: true, receivedAt: record.receivedAt, expiresInSeconds: LATEST_TTL_SECONDS, historyPoints: MAX_HISTORY });
+    ];
+    let incidentTransition: "STARTED" | "ENDED" | "UPDATED" | null = null;
+
+    if (record.mpu.eventActive) {
+      let incident: Incident | null = null;
+      if (activeId) {
+        const rawIncident = await redisCommand(config, ["GET", "prs:incident:" + activeId]) as string | null;
+        if (rawIncident) incident = JSON.parse(rawIncident) as Incident;
+      }
+      if (!incident) {
+        const id = "PRS-" + new Date(record.receivedAt).toISOString().replace(/[-:.TZ]/g, "").slice(0, 14) + "-" + randomUUID().slice(0, 8).toUpperCase();
+        incident = {
+          id, deviceId: record.deviceId, type: "VIBRATION_EVENT", status: "ACTIVE",
+          startedAt: record.receivedAt, endedAt: null, durationSeconds: null,
+          startLocation: locationSnapshot(record.gps), endLocation: null,
+          startVibration: vibrationSnapshot(record.mpu), endVibration: null,
+          lastTelemetryAt: record.receivedAt,
+        };
+        commands.push(["SET", activeKey, id]);
+        commands.push(["ZADD", INCIDENT_INDEX, String(Date.now()), id]);
+        incidentTransition = "STARTED";
+      } else {
+        if (incident.status === "INTERRUPTED") {
+          incident.status = "ACTIVE";
+          incident.resumedAt = record.receivedAt;
+        }
+        incident.lastTelemetryAt = record.receivedAt;
+        incidentTransition = "UPDATED";
+      }
+      commands.push(["SET", "prs:incident:" + incident.id, JSON.stringify(incident)]);
+    } else if (activeId) {
+      const rawIncident = await redisCommand(config, ["GET", "prs:incident:" + activeId]) as string | null;
+      if (rawIncident) {
+        const incident = JSON.parse(rawIncident) as Incident;
+        incident.status = "RESOLVED";
+        incident.endedAt = record.receivedAt;
+        incident.durationSeconds = Math.max(0, Math.round((Date.parse(record.receivedAt) - Date.parse(incident.startedAt)) / 1000));
+        incident.endLocation = locationSnapshot(record.gps);
+        incident.endVibration = vibrationSnapshot(record.mpu);
+        incident.lastTelemetryAt = record.receivedAt;
+        commands.push(["SET", "prs:incident:" + incident.id, JSON.stringify(incident)]);
+        incidentTransition = "ENDED";
+      }
+      commands.push(["DEL", activeKey]);
+    }
+
+    await redisPipeline(config, commands);
+    return NextResponse.json({
+      ok: true, receivedAt: record.receivedAt, expiresInSeconds: LATEST_TTL_SECONDS,
+      historyPoints: MAX_HISTORY, incidentTransition,
+    });
   } catch (error) {
     console.error("[PRS telemetry] Redis write failed:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json({ ok: false, error: "Telemetry storage unavailable" }, { status: 503 });
@@ -152,16 +232,12 @@ export async function GET() {
       : [];
 
     return NextResponse.json({
-      connected: true,
-      configured: true,
+      connected: true, configured: true,
       telemetry: {
-        deviceId: record.deviceId,
-        uptimeSeconds: record.uptimeSeconds,
-        receivedAt: record.receivedAt,
+        deviceId: record.deviceId, uptimeSeconds: record.uptimeSeconds, receivedAt: record.receivedAt,
         mpu: record.mpu,
         gps: { fix: record.gps.fix, satellites: record.gps.satellites, latitude: record.gps.fix ? record.gps.latitude : null, longitude: record.gps.fix ? record.gps.longitude : null },
-        pressure: record.pressure,
-        temperature: record.temperature,
+        pressure: record.pressure, temperature: record.temperature,
       },
       history,
     }, { headers: { "Cache-Control": "no-store, max-age=0" } });
