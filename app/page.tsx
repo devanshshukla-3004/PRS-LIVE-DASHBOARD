@@ -180,6 +180,7 @@ export default function Home() {
           <span className={"h-2 w-2 rounded-full " + (deviceOnline ? "bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,.8)]" : "bg-amber-300")}/>
           <span className={"text-[11px] font-semibold tracking-[.14em] " + statusTone}>{deviceState}</span>
           <span className="hidden text-xs muted sm:inline">{telemetry?.deviceId ?? "PRS device not detected"}</span>
+          <button onClick={async () => { await fetch("/api/auth", { method: "DELETE" }); window.location.href = "/login"; }} className="ml-2 rounded-full border border-white/10 px-3 py-1.5 text-[10px] text-slate-300 hover:border-cyan-200/30 hover:text-white">Lock</button>
         </div>
       </div>
     </header>
