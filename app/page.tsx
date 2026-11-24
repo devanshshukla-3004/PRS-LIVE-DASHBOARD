@@ -128,7 +128,7 @@ export default function Home() {
       item.endLocation?.latitude ?? "", item.endLocation?.longitude ?? "",
       item.startVibration.score, item.endVibration?.score ?? "",
     ]);
-    const csv = [columns, ...rows].map((row) => row.map((value) => '"' + String(value).replace(/"/g, '""') + '"').join(",")).join("\\r\\n");
+    const csv = [columns, ...rows].map((row) => row.map((value) => '"' + String(value).replace(/"/g, '""') + '"').join(",")).join("\r\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const downloadLink = document.createElement("a");
