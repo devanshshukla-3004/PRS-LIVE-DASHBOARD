@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const KEY = "prs:telemetry:latest";
-const TTL_SECONDS = 120;
+const LATEST_KEY = "prs:telemetry:latest";
+const HISTORY_KEY = "prs:telemetry:history";
+const LATEST_TTL_SECONDS = 120;
+const HISTORY_TTL_SECONDS = 900;
+const MAX_HISTORY = 180;
 
 type Telemetry = {
   deviceId: string;
@@ -19,7 +22,6 @@ function redisConfig() {
   const rawUrl = process.env.UPSTASH_REDIS_REST_URL;
   const rawToken = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!rawUrl || !rawToken) return null;
-  // Vercel env values are sometimes pasted with surrounding whitespace/quotes.
   const url = rawUrl.trim().replace(/^["']|["']$/g, "").replace(/\/$/, "");
   const token = rawToken.trim().replace(/^["']|["']$/g, "");
   try {
@@ -34,14 +36,29 @@ function redisConfig() {
 async function redisCommand(config: { url: string; token: string }, command: string[]) {
   const response = await fetch(config.url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+    headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
     body: JSON.stringify(command),
     cache: "no-store",
   });
-  if (!response.ok) throw new Error(`Redis request failed: ${response.status}`);
+  if (!response.ok) throw new Error("Redis request failed: " + response.status);
   const result = await response.json();
   if (result.error) throw new Error("Redis command failed");
   return result.result;
+}
+
+async function redisPipeline(config: { url: string; token: string }, commands: string[][]) {
+  const response = await fetch(config.url + "/pipeline", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
+    body: JSON.stringify(commands),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error("Redis pipeline failed: " + response.status);
+  const results = await response.json();
+  if (!Array.isArray(results) || results.some((item: { error?: string }) => item?.error)) {
+    throw new Error("Redis pipeline command failed");
+  }
+  return results;
 }
 
 function validTelemetry(value: unknown): value is Telemetry {
@@ -71,7 +88,7 @@ function validTelemetry(value: unknown): value is Telemetry {
 
 export async function POST(request: NextRequest) {
   const expected = process.env.PRS_DEVICE_TOKEN;
-  const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  const supplied = request.headers.get("authorization")?.replace(/^Bearer\\s+/i, "");
   if (!expected || !supplied || supplied.length !== expected.length ||
       !Buffer.from(supplied).equals(Buffer.from(expected))) {
     return NextResponse.json({ ok: false, error: "Unauthorized device" }, { status: 401 });
@@ -88,9 +105,24 @@ export async function POST(request: NextRequest) {
   if (!config) return NextResponse.json({ ok: false, error: "Telemetry storage is not configured" }, { status: 503 });
 
   const record = { ...body, receivedAt: new Date().toISOString() };
+  const historyPoint = {
+    receivedAt: record.receivedAt,
+    uptimeSeconds: record.uptimeSeconds,
+    vibrationScore: record.mpu.vibrationScore,
+    ax: record.mpu.ax,
+    ay: record.mpu.ay,
+    az: record.mpu.az,
+    eventActive: record.mpu.eventActive,
+  };
+
   try {
-    await redisCommand(config, ["SET", KEY, JSON.stringify(record), "EX", String(TTL_SECONDS)]);
-    return NextResponse.json({ ok: true, receivedAt: record.receivedAt, expiresInSeconds: TTL_SECONDS });
+    await redisPipeline(config, [
+      ["SET", LATEST_KEY, JSON.stringify(record), "EX", String(LATEST_TTL_SECONDS)],
+      ["RPUSH", HISTORY_KEY, JSON.stringify(historyPoint)],
+      ["LTRIM", HISTORY_KEY, String(-MAX_HISTORY), "-1"],
+      ["EXPIRE", HISTORY_KEY, String(HISTORY_TTL_SECONDS)],
+    ]);
+    return NextResponse.json({ ok: true, receivedAt: record.receivedAt, expiresInSeconds: LATEST_TTL_SECONDS, historyPoints: MAX_HISTORY });
   } catch (error) {
     console.error("[PRS telemetry] Redis write failed:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json({ ok: false, error: "Telemetry storage unavailable" }, { status: 503 });
@@ -99,13 +131,26 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   const config = redisConfig();
-  if (!config) return NextResponse.json({ connected: false, configured: false, telemetry: null });
+  if (!config) return NextResponse.json({ connected: false, configured: false, telemetry: null, history: [] });
 
   try {
-    const raw = await redisCommand(config, ["GET", KEY]);
-    if (!raw) return NextResponse.json({ connected: false, configured: true, telemetry: null });
+    const [raw, rawHistory] = await Promise.all([
+      redisCommand(config, ["GET", LATEST_KEY]),
+      redisCommand(config, ["LRANGE", HISTORY_KEY, "0", "-1"]),
+    ]);
+    if (!raw) return NextResponse.json({ connected: false, configured: true, telemetry: null, history: [] });
+
     const record = JSON.parse(raw as string) as Telemetry & { receivedAt: string };
-    // Exact GPS coordinates remain server-side; the public dashboard receives fix/satellite state only.
+    const history = Array.isArray(rawHistory)
+      ? rawHistory.map((item: string) => JSON.parse(item)).filter((item: unknown) => {
+          if (!item || typeof item !== "object") return false;
+          const point = item as Record<string, unknown>;
+          return typeof point.receivedAt === "string" && typeof point.vibrationScore === "number"
+            && Number.isFinite(point.vibrationScore) && typeof point.ax === "number"
+            && typeof point.ay === "number" && typeof point.az === "number";
+        })
+      : [];
+
     return NextResponse.json({
       connected: true,
       configured: true,
@@ -118,9 +163,10 @@ export async function GET() {
         pressure: record.pressure,
         temperature: record.temperature,
       },
+      history,
     }, { headers: { "Cache-Control": "no-store, max-age=0" } });
   } catch (error) {
     console.error("[PRS telemetry] Redis read failed:", error instanceof Error ? error.message : "Unknown error");
-    return NextResponse.json({ connected: false, configured: true, telemetry: null, error: "Telemetry storage unavailable" }, { status: 503 });
+    return NextResponse.json({ connected: false, configured: true, telemetry: null, history: [], error: "Telemetry storage unavailable" }, { status: 503 });
   }
 }
