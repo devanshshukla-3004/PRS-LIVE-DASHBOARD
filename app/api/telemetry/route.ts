@@ -37,22 +37,27 @@ async function redisCommand(config: { url: string; token: string }, command: str
 
 function validTelemetry(value: unknown): value is Telemetry {
   if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, any>;
-  const finite = (n: unknown) => typeof n === "number" && Number.isFinite(n);
+  const v = value as Record<string, unknown>;
+  const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  const mpu = v.mpu as Record<string, unknown> | undefined;
+  const gps = v.gps as Record<string, unknown> | undefined;
+  const pressure = v.pressure as Record<string, unknown> | undefined;
+  const temperature = v.temperature as Record<string, unknown> | undefined;
+
   return typeof v.deviceId === "string" && v.deviceId.length > 0 && v.deviceId.length <= 64
     && finite(v.uptimeSeconds) && v.uptimeSeconds >= 0
-    && v.mpu && typeof v.mpu.connected === "boolean"
-    && finite(v.mpu.ax) && finite(v.mpu.ay) && finite(v.mpu.az)
-    && finite(v.mpu.vibrationScore) && typeof v.mpu.eventActive === "boolean"
-    && v.gps && typeof v.gps.fix === "boolean" && Number.isInteger(v.gps.satellites)
-    && v.gps.satellites >= 0 && v.gps.satellites <= 40
-    && (v.gps.latitude === null || (finite(v.gps.latitude) && v.gps.latitude >= -90 && v.gps.latitude <= 90))
-    && (v.gps.longitude === null || (finite(v.gps.longitude) && v.gps.longitude >= -180 && v.gps.longitude <= 180))
-    && v.pressure && typeof v.pressure.connected === "boolean"
-    && (v.pressure.psi === null || (finite(v.pressure.psi) && v.pressure.psi >= 0 && v.pressure.psi <= 300))
-    && typeof v.pressure.simulated === "boolean"
-    && v.temperature && typeof v.temperature.connected === "boolean"
-    && (v.temperature.celsius === null || (finite(v.temperature.celsius) && v.temperature.celsius >= -50 && v.temperature.celsius <= 200));
+    && !!mpu && typeof mpu.connected === "boolean"
+    && finite(mpu.ax) && finite(mpu.ay) && finite(mpu.az)
+    && finite(mpu.vibrationScore) && typeof mpu.eventActive === "boolean"
+    && !!gps && typeof gps.fix === "boolean" && Number.isInteger(gps.satellites)
+    && (gps.satellites as number) >= 0 && (gps.satellites as number) <= 40
+    && (gps.latitude === null || (finite(gps.latitude) && gps.latitude >= -90 && gps.latitude <= 90))
+    && (gps.longitude === null || (finite(gps.longitude) && gps.longitude >= -180 && gps.longitude <= 180))
+    && !!pressure && typeof pressure.connected === "boolean"
+    && (pressure.psi === null || (finite(pressure.psi) && pressure.psi >= 0 && pressure.psi <= 300))
+    && typeof pressure.simulated === "boolean"
+    && !!temperature && typeof temperature.connected === "boolean"
+    && (temperature.celsius === null || (finite(temperature.celsius) && temperature.celsius >= -50 && temperature.celsius <= 200));
 }
 
 export async function POST(request: NextRequest) {
