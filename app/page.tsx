@@ -195,7 +195,7 @@ export default function Home() {
             <div><p className="text-xs muted">Firmware-reported event state</p><p className="mt-2 text-lg font-semibold">{fresh && telemetry ? telemetry.mpu.eventActive ? "EVENT ACTIVE" : "NORMAL" : "NO LIVE STATE"}</p></div>
             <span className={"rounded-full px-3 py-1.5 text-[10px] font-semibold tracking-wider " + (fresh && telemetry?.mpu.eventActive ? "bg-amber-300/10 text-amber-200" : "bg-white/5 text-slate-300")}>{fresh && telemetry ? telemetry.mpu.eventActive ? "EXPERIMENTAL ALERT" : "NO ACTIVE EVENT" : "WAITING"}</span>
           </div>
-          <p className="mt-3 text-xs muted">This is the firmware's experimental vibration flag. It is not a validated puncture detector and does not confirm tyre damage.</p>
+          <p className="mt-3 text-xs muted">This is the firmware&apos;s experimental vibration flag. It is not a validated puncture detector and does not confirm tyre damage.</p>
         </section>
 
         <section className="panel p-5 sm:p-6">
