@@ -57,15 +57,33 @@ export async function GET() {
       node(around:15000,${lat},${lon})["craft"="car_repair"];
       way(around:15000,${lat},${lon})["craft"="car_repair"];
     );out center tags;`;
-    const response = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "PRS-Prototype/1.0" },
-      body: new URLSearchParams({ data: query }),
-      signal: AbortSignal.timeout(25000),
-      cache: "no-store",
-    });
-    if (!response.ok) throw new Error("OpenStreetMap service returned " + response.status);
-    const data = await response.json() as { elements?: Array<{ id: number; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }> };
+    const endpoints = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter",
+    ];
+    let data: { elements?: Array<{ id: number; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }> } | null = null;
+    let lastError = "No OpenStreetMap endpoint responded";
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "PRS-Prototype/1.0" },
+          body: new URLSearchParams({ data: query }),
+          signal: AbortSignal.timeout(12000),
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          lastError = "OpenStreetMap endpoint returned " + response.status;
+          continue;
+        }
+        data = await response.json() as { elements?: Array<{ id: number; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }> };
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : "OpenStreetMap request failed";
+      }
+    }
+    if (!data) throw new Error(lastError);
     const places = (data.elements ?? []).flatMap((item) => {
       const point = item.center ?? (item.lat !== undefined && item.lon !== undefined ? { lat: item.lat, lon: item.lon } : null);
       if (!point) return [];
