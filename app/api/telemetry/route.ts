@@ -88,7 +88,7 @@ function validTelemetry(value: unknown): value is Telemetry {
 
 export async function POST(request: NextRequest) {
   const expected = process.env.PRS_DEVICE_TOKEN;
-  const supplied = request.headers.get("authorization")?.replace(/^Bearer\\s+/i, "");
+  const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!expected || !supplied || supplied.length !== expected.length ||
       !Buffer.from(supplied).equals(Buffer.from(expected))) {
     return NextResponse.json({ ok: false, error: "Unauthorized device" }, { status: 401 });
