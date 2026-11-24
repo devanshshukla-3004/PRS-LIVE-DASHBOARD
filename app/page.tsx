@@ -21,7 +21,7 @@ type LiveSnapshot = {
     uptimeSeconds: number;
     receivedAt: string;
     mpu: { connected: boolean; ax: number; ay: number; az: number; vibrationScore: number; eventActive: boolean };
-    gps: { fix: boolean; satellites: number };
+    gps: { fix: boolean; satellites: number; latitude: number | null; longitude: number | null };
     pressure: { connected: boolean; psi: number | null; simulated: boolean };
     temperature: { connected: boolean; celsius: number | null };
   };
@@ -187,6 +187,30 @@ export default function Home() {
           </div>
         </section>
       </div>
+
+
+      <section className="panel mt-5 p-5 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><p className="text-[11px] tracking-[.18em] muted">NEO-6M GPS · LIVE RECEIVER DATA</p><h2 className="mt-1 text-lg font-semibold">GPS location & navigation</h2><p className="mt-1 text-xs muted">Coordinates are shown only when the latest device packet contains a valid satellite fix.</p></div>
+          <span className={"rounded-full px-3 py-1.5 text-[10px] font-semibold " + (fresh && telemetry?.gps.fix && telemetry.gps.latitude !== null && telemetry.gps.longitude !== null ? "bg-emerald-300/10 text-emerald-200" : "bg-amber-300/10 text-amber-200")}>{fresh && telemetry?.gps.fix ? "SATELLITE FIX" : "NO CURRENT FIX"}</span>
+        </div>
+        <div className="mt-5 grid gap-4 lg:grid-cols-[.9fr_1.5fr]">
+          <div className="grid grid-cols-2 gap-3 content-start">
+            <div className="rounded-xl border border-white/8 bg-black/20 p-4"><p className="text-[10px] uppercase tracking-wider muted">Latitude</p><p className="mt-2 break-all text-lg font-semibold tabular-nums">{fresh && telemetry?.gps.fix && telemetry.gps.latitude !== null ? telemetry.gps.latitude.toFixed(6) : "—"}</p></div>
+            <div className="rounded-xl border border-white/8 bg-black/20 p-4"><p className="text-[10px] uppercase tracking-wider muted">Longitude</p><p className="mt-2 break-all text-lg font-semibold tabular-nums">{fresh && telemetry?.gps.fix && telemetry.gps.longitude !== null ? telemetry.gps.longitude.toFixed(6) : "—"}</p></div>
+            <div className="rounded-xl border border-white/8 bg-black/20 p-4"><p className="text-[10px] uppercase tracking-wider muted">Satellites</p><p className="mt-2 text-lg font-semibold">{fresh && telemetry ? telemetry.gps.satellites : "—"}</p></div>
+            <div className="rounded-xl border border-white/8 bg-black/20 p-4"><p className="text-[10px] uppercase tracking-wider muted">Fix status</p><p className="mt-2 text-lg font-semibold">{fresh && telemetry ? telemetry.gps.fix ? "Valid" : "No fix" : "—"}</p></div>
+            <div className="col-span-2 rounded-xl border border-white/8 bg-black/20 p-4"><p className="text-[10px] uppercase tracking-wider muted">GPS data timestamp</p><p className="mt-2 text-sm font-medium">{fresh && telemetry ? new Date(telemetry.receivedAt).toLocaleString() : "Waiting for live GPS packet"}</p></div>
+            {fresh && telemetry?.gps.fix && telemetry.gps.latitude !== null && telemetry.gps.longitude !== null && <a className="col-span-2 text-sm text-cyan-200 underline underline-offset-4" href={"https://www.google.com/maps?q=" + telemetry.gps.latitude + "," + telemetry.gps.longitude} target="_blank" rel="noreferrer">Open exact live coordinates in Google Maps ↗</a>}
+          </div>
+          <div className="min-h-[280px] overflow-hidden rounded-xl border border-white/10 bg-black/20">
+            {fresh && telemetry?.gps.fix && telemetry.gps.latitude !== null && telemetry.gps.longitude !== null
+              ? <iframe title="Live GPS map" className="h-[300px] w-full border-0" loading="lazy" src={"https://www.openstreetmap.org/export/embed.html?bbox=" + (telemetry.gps.longitude - 0.01) + "%2C" + (telemetry.gps.latitude - 0.01) + "%2C" + (telemetry.gps.longitude + 0.01) + "%2C" + (telemetry.gps.latitude + 0.01) + "&layer=mapnik&marker=" + telemetry.gps.latitude + "%2C" + telemetry.gps.longitude}/>
+              : <div className="flex h-full min-h-[280px] flex-col items-center justify-center px-5 text-center"><MapPin size={28} className="text-slate-500"/><p className="mt-3 text-sm font-medium text-slate-300">Map will appear after a valid GPS fix</p><p className="mt-1 text-xs muted">Keep the NEO-6M antenna with a clear view of the sky.</p></div>}
+          </div>
+        </div>
+        <p className="mt-3 text-[10px] muted">Location is sensitive. Exact coordinates are now visible on this dashboard; share the dashboard link carefully.</p>
+      </section>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-2">
         <section className="panel p-5 sm:p-6">
