@@ -82,7 +82,8 @@ export async function POST(request: NextRequest) {
   try {
     await redisCommand(config, ["SET", KEY, JSON.stringify(record), "EX", String(TTL_SECONDS)]);
     return NextResponse.json({ ok: true, receivedAt: record.receivedAt, expiresInSeconds: TTL_SECONDS });
-  } catch {
+  } catch (error) {
+    console.error("[PRS telemetry] Redis write failed:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json({ ok: false, error: "Telemetry storage unavailable" }, { status: 503 });
   }
 }
@@ -109,7 +110,8 @@ export async function GET() {
         temperature: record.temperature,
       },
     }, { headers: { "Cache-Control": "no-store, max-age=0" } });
-  } catch {
+  } catch (error) {
+    console.error("[PRS telemetry] Redis read failed:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json({ connected: false, configured: true, telemetry: null, error: "Telemetry storage unavailable" }, { status: 503 });
   }
 }
