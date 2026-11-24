@@ -120,6 +120,24 @@ export default function Home() {
     return () => { active = false; window.clearInterval(timer); };
   }, []);
 
+  const exportIncidents = () => {
+    const columns = ["Incident ID", "Device ID", "Status", "Started At", "Ended At", "Duration Seconds", "Start Latitude", "Start Longitude", "End Latitude", "End Longitude", "Start Vibration Score", "End Vibration Score"];
+    const rows = incidents.map((item) => [
+      item.id, item.deviceId, item.status, item.startedAt, item.endedAt ?? "",
+      item.durationSeconds ?? "", item.startLocation?.latitude ?? "", item.startLocation?.longitude ?? "",
+      item.endLocation?.latitude ?? "", item.endLocation?.longitude ?? "",
+      item.startVibration.score, item.endVibration?.score ?? "",
+    ]);
+    const csv = [columns, ...rows].map((row) => row.map((value) => '"' + String(value).replace(/"/g, '""') + '"').join(",")).join("\\r\\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const downloadLink = document.createElement("a");
+    downloadLink.href = url;
+    downloadLink.download = "prs-incident-history.csv";
+    downloadLink.click();
+    URL.revokeObjectURL(url);
+  };
+
   const loadNearby = async () => {
     setNearbyLoading(true);
     try {
@@ -283,7 +301,7 @@ export default function Home() {
       <section className="panel mt-5 p-5 sm:p-6" id="incident-center">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><p className="text-[11px] tracking-[.18em] muted">PERSISTENT EVENT RECORDS</p><h2 className="mt-1 text-lg font-semibold">Incident Center</h2><p className="mt-1 text-xs muted">Start/end records are created from the firmware event flag. Locations are snapshots from the event packets.</p></div>
-          <span className="rounded-full bg-cyan-300/10 px-3 py-1.5 text-[10px] font-semibold text-cyan-100">LIVE INCIDENT LOG</span>
+          <div className="flex items-center gap-2"><button onClick={exportIncidents} disabled={!incidents.length} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 disabled:opacity-40">Export CSV</button><span className="rounded-full bg-cyan-300/10 px-3 py-1.5 text-[10px] font-semibold text-cyan-100">LIVE INCIDENT LOG</span></div>
         </div>
         {eventNotice && <div className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3"><div className="flex gap-2 text-sm text-amber-100"><AlertTriangle size={17} className="mt-0.5 shrink-0"/>{eventNotice}</div><button onClick={() => setEventNotice("")} className="text-xs text-amber-100/70 hover:text-white">Dismiss</button></div>}
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -293,7 +311,7 @@ export default function Home() {
           ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-white/8 bg-black/20 p-3"><p className="text-[10px] uppercase tracking-wider muted">{String(label)}</p><p className="mt-1 text-xl font-semibold tabular-nums">{value}</p></div>)}
         </div>
         {incidentError && <p className="mt-3 text-xs text-amber-200">{incidentError}</p>}
-        <div className="mt-4 space-y-3">
+        {incidents[0]?.startLocation && <div className="mt-4 overflow-hidden rounded-xl border border-white/10"><iframe title="Latest incident location" className="h-52 w-full border-0" loading="lazy" src={"https://www.openstreetmap.org/export/embed.html?bbox=" + (incidents[0].startLocation.longitude - 0.01) + "%2C" + (incidents[0].startLocation.latitude - 0.01) + "%2C" + (incidents[0].startLocation.longitude + 0.01) + "%2C" + (incidents[0].startLocation.latitude + 0.01) + "&layer=mapnik&marker=" + incidents[0].startLocation.latitude + "%2C" + incidents[0].startLocation.longitude}/></div>}\n        <div className="mt-4 space-y-3">
           {incidents.length ? incidents.map((incident) => <article key={incident.id} className="rounded-xl border border-white/10 bg-black/20 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><p className="text-sm font-semibold">{incident.id}</p><p className="mt-1 text-xs muted">{incident.deviceId} · {new Date(incident.startedAt).toLocaleString()}</p></div>
