@@ -16,10 +16,19 @@ type Telemetry = {
 };
 
 function redisConfig() {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return { url: url.replace(/\/$/, ""), token };
+  const rawUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const rawToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!rawUrl || !rawToken) return null;
+  // Vercel env values are sometimes pasted with surrounding whitespace/quotes.
+  const url = rawUrl.trim().replace(/^["']|["']$/g, "").replace(/\/$/, "");
+  const token = rawToken.trim().replace(/^["']|["']$/g, "");
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || !parsed.hostname.endsWith("upstash.io")) return null;
+  } catch {
+    return null;
+  }
+  return { url, token };
 }
 
 async function redisCommand(config: { url: string; token: string }, command: string[]) {
